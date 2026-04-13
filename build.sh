@@ -29,6 +29,16 @@ cp Info.plist "${BUILD_DIR}/${BUNDLE_NAME}/Contents/"
 codesign --force --sign - "${BUILD_DIR}/${BUNDLE_NAME}"
 
 echo "✓ Built ${BUILD_DIR}/${BUNDLE_NAME}"
+
+# Create zip for marketplace upload
+cd "${BUILD_DIR}"
+zip -r "${PLUGIN_NAME}.zip" "${BUNDLE_NAME}"
+cd ..
+
+echo "✓ Created ${BUILD_DIR}/${PLUGIN_NAME}.zip (for marketplace upload)"
 echo ""
-echo "Install:"
+echo "Install locally:"
 echo "  cp -r ${BUILD_DIR}/${BUNDLE_NAME} ~/.config/codeisland/plugins/"
+echo ""
+echo "Upload to marketplace:"
+echo "  ${BUILD_DIR}/${PLUGIN_NAME}.zip"
