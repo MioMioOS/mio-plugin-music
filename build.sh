@@ -5,9 +5,13 @@ set -e
 PLUGIN_NAME="music-player"
 BUNDLE_NAME="${PLUGIN_NAME}.bundle"
 BUILD_DIR="build"
-SOURCES="Sources/*.swift"
+
+# Recursively pick up every .swift under Sources/ (root + subdirectories
+# like sources/, ui/, support/ for the v2.0.0 layered layout).
+SOURCES=$(find Sources -name "*.swift" -type f)
 
 echo "Building ${PLUGIN_NAME} plugin..."
+echo "Compiling $(echo "$SOURCES" | wc -l | tr -d ' ') Swift files..."
 
 # Clean
 rm -rf "${BUILD_DIR}"
