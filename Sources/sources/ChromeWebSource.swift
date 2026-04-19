@@ -34,10 +34,13 @@ enum ChromeWebSource {
     // MARK: - Fetch
 
     static func fetch() async -> ChromeTrackInfo? {
+        // Iterating N tabs × JS injection is O(N) and can be slow with many
+        // tabs; cap at 3 seconds so the router doesn't stall the whole cycle.
         let script = """
         tell application "System Events"
             if not (exists process "Google Chrome") then return "NOT_RUNNING"
         end tell
+        with timeout of 3 seconds
         tell application "Google Chrome"
             set playingTitle to ""
             set playingURL to ""
@@ -70,6 +73,7 @@ enum ChromeWebSource {
             if playingURL is not "" then return "PLAYING_TAB||" & playingTitle & "||" & playingURL & "||" & playingInfo
             return "NOT_FOUND"
         end tell
+        end timeout
         """
 
         guard let raw = await runAppleScript(script, tag: "chrome") else { return nil }

@@ -3,3 +3,4 @@ build/
 *.swiftmodule
 *.dSYM
 .build/
+icon/

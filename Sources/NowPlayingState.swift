@@ -432,7 +432,11 @@ func runAppleScript(_ source: String, tag: String) async -> String? {
             let result = script.executeAndReturnError(&errorDict)
             if let errorDict {
                 let num = errorDict[NSAppleScript.errorNumber] as? Int ?? 0
-                if num != -600 && num != -1728 {
+                // Silence known-expected error codes:
+                //   -600  = application not running
+                //   -1712 = errAETimeout (our `with timeout of N seconds` firing)
+                //   -1728 = AEError, generic Apple Event descriptor issue
+                if num != -600 && num != -1712 && num != -1728 {
                     let msg = errorDict[NSAppleScript.errorMessage] as? String ?? "<no message>"
                     NSLog("[mio-plugin-music] AppleScript error [\(tag)] \(num): \(msg)")
                 }

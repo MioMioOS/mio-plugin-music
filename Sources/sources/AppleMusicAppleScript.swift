@@ -18,24 +18,32 @@ enum AppleMusicAppleScript {
     // MARK: - Fetch
 
     static func fetch() async -> AppleScriptTrackInfo? {
+        // Music.app occasionally stalls its AppleEvent handler (observed in
+        // macOS 15.x when the app is mid-sync). Without an explicit timeout
+        // each fetch inherits the 120-second default, which freezes the whole
+        // source router for 2 minutes. `with timeout of 2 seconds` raises
+        // errAETimeout (-1712) if Music doesn't respond quickly, and our
+        // Swift layer turns that into nil so the router can move on.
         let script = """
         tell application "System Events"
             if not (exists process "Music") then return "NOT_RUNNING"
         end tell
-        tell application "Music"
-            if player state is playing or player state is paused then
-                set trackName to name of current track
-                set trackArtist to artist of current track
-                set trackAlbum to album of current track
-                set trackDuration to duration of current track
-                set trackPosition to player position
-                set stateString to "PAUSED"
-                if player state is playing then set stateString to "PLAYING"
-                return stateString & "||" & trackName & "||" & trackArtist & "||" & trackAlbum & "||" & trackDuration & "||" & trackPosition
-            else
-                return "NOT_PLAYING"
-            end if
-        end tell
+        with timeout of 2 seconds
+            tell application "Music"
+                if player state is playing or player state is paused then
+                    set trackName to name of current track
+                    set trackArtist to artist of current track
+                    set trackAlbum to album of current track
+                    set trackDuration to duration of current track
+                    set trackPosition to player position
+                    set stateString to "PAUSED"
+                    if player state is playing then set stateString to "PLAYING"
+                    return stateString & "||" & trackName & "||" & trackArtist & "||" & trackAlbum & "||" & trackDuration & "||" & trackPosition
+                else
+                    return "NOT_PLAYING"
+                end if
+            end tell
+        end timeout
         """
 
         guard let raw = await runAppleScript(script, tag: "music") else { return nil }

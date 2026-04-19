@@ -9,13 +9,18 @@
 //    3. Nothing playing             (title.isEmpty)
 //    4. Now playing                 (default)
 //
-//  Background uses an extracted tint from the album art (fades to
-//  near-black). Control surface, text and spacing follow the
-//  MioIsland aesthetic:
-//    - #0A0A0A near-black base
-//    - white text with opacity tiers (1.0 / 0.7 / 0.5 / 0.3)
-//    - lime #CAFF00 as the single accent color
-//    - 16pt corner on the big card, 8pt on small chips
+//  v2.0.1 layout: compact horizontal hero inspired by SuperIsland's
+//  NowPlaying. Medium album art on the left, metadata + source badge
+//  on the right, progress + times inline below, transport controls
+//  at bottom. Half the vertical footprint of v2.0.0 for the same
+//  information density.
+//
+//  Background uses a tint extracted from the album art (fades into
+//  a near-black base). Palette:
+//    #0A0A0A near-black base
+//    white text tiers 1.0 / 0.75 / 0.45 / 0.3
+//    lime #CAFF00 as the single accent color
+//    16pt corner on the big art, 8pt on small chips
 //
 
 import AppKit
@@ -45,7 +50,7 @@ struct ExpandedView: View {
                 .ignoresSafeArea()
 
             content
-                .padding(28)
+                .padding(20)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -99,50 +104,45 @@ struct ExpandedView: View {
         }
     }
 
-    // MARK: - Playing card
+    // MARK: - Playing card — compact horizontal layout
 
     private var playingCard: some View {
-        VStack(spacing: 0) {
-            // Header row: small eyebrow + source badge.
-            HStack(alignment: .firstTextBaseline) {
-                Text(L10n.nowPlayingHeading.uppercased())
-                    .font(.system(size: 10, weight: .bold))
-                    .tracking(2)
-                    .foregroundColor(Self.ink.opacity(0.5))
-                Spacer()
-                sourceBadge
-            }
-            .padding(.bottom, 22)
+        VStack(spacing: 16) {
+            // Hero row: album art left, metadata + source badge right
+            HStack(alignment: .top, spacing: 14) {
+                albumArt
 
-            // Album art (big, centered)
-            albumArt
-                .padding(.bottom, 24)
+                VStack(alignment: .leading, spacing: 4) {
+                    // Source badge, flush right with the artwork top
+                    HStack {
+                        Spacer()
+                        sourceBadge
+                    }
 
-            // Title + artist + album
-            VStack(spacing: 8) {
-                Text(state.title.isEmpty ? L10n.unknownTitle : state.title)
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundColor(Self.ink)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                    Text(state.title.isEmpty ? L10n.unknownTitle : state.title)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(Self.ink)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                Text(state.artist.isEmpty ? L10n.unknownArtist : state.artist)
-                    .font(.system(size: 14, weight: .regular))
-                    .foregroundColor(Self.ink.opacity(0.75))
-                    .lineLimit(1)
-
-                if !state.album.isEmpty {
-                    Text(state.album)
-                        .font(.system(size: 12, weight: .regular))
-                        .foregroundColor(Self.ink.opacity(0.45))
+                    Text(state.artist.isEmpty ? L10n.unknownArtist : state.artist)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundColor(Self.ink.opacity(0.75))
                         .lineLimit(1)
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.bottom, 28)
 
-            // Seek bar + time labels
+                    if !state.album.isEmpty {
+                        Text(state.album)
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundColor(Self.ink.opacity(0.45))
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            // Progress + times inline on one row
             VStack(spacing: 6) {
                 SeekBar(
                     progress: state.progress,
@@ -161,12 +161,12 @@ struct ExpandedView: View {
                         .foregroundColor(Self.ink.opacity(0.5))
                 }
             }
-            .padding(.bottom, 24)
 
             // Transport controls
             transportControls
+                .padding(.top, 2)
         }
-        .frame(maxWidth: 520)
+        .frame(maxWidth: 460)
     }
 
     private var albumArt: some View {
@@ -175,33 +175,33 @@ struct ExpandedView: View {
                 Image(nsImage: art)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .frame(width: 260, height: 260)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .frame(width: 128, height: 128)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             } else {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(Color.white.opacity(0.08))
-                    .frame(width: 260, height: 260)
+                    .frame(width: 128, height: 128)
                     .overlay(
                         Image(systemName: "music.note")
-                            .font(.system(size: 64, weight: .light))
+                            .font(.system(size: 34, weight: .light))
                             .foregroundColor(Self.ink.opacity(0.35))
                     )
             }
         }
-        .shadow(color: .black.opacity(0.4), radius: 20, x: 0, y: 10)
+        .shadow(color: .black.opacity(0.35), radius: 14, x: 0, y: 6)
     }
 
     private var sourceBadge: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
             Circle()
                 .fill(state.isPlaying ? Self.lime : Self.ink.opacity(0.4))
-                .frame(width: 6, height: 6)
+                .frame(width: 5, height: 5)
             Text(displaySourceName)
                 .font(.system(size: 10, weight: .medium))
                 .foregroundColor(Self.ink.opacity(0.7))
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
         .background(
             Capsule().fill(Color.white.opacity(0.08))
         )
@@ -212,25 +212,25 @@ struct ExpandedView: View {
     }
 
     private var transportControls: some View {
-        HStack(spacing: 40) {
+        HStack(spacing: 28) {
             transportButton(
                 symbol: "backward.fill",
-                size: 20,
+                size: 16,
                 tooltip: L10n.previousTooltip
             ) {
                 state.previousTrack()
             }
 
-            // Play / pause. Larger, accent button.
+            // Play / pause — accent button, slightly smaller than v2.0.0 (48 vs 56)
             Button(action: { state.togglePlayPause() }) {
                 ZStack {
                     Circle()
                         .fill(Self.lime)
-                        .frame(width: 56, height: 56)
+                        .frame(width: 48, height: 48)
                     Image(systemName: state.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 22, weight: .bold))
+                        .font(.system(size: 18, weight: .bold))
                         .foregroundColor(.black)
-                        .offset(x: state.isPlaying ? 0 : 2)  // optical nudge for play
+                        .offset(x: state.isPlaying ? 0 : 2)  // optical nudge for play glyph
                 }
             }
             .buttonStyle(.plain)
@@ -239,7 +239,7 @@ struct ExpandedView: View {
 
             transportButton(
                 symbol: "forward.fill",
-                size: 20,
+                size: 16,
                 tooltip: L10n.nextTooltip
             ) {
                 state.nextTrack()
@@ -264,23 +264,23 @@ struct ExpandedView: View {
     // MARK: - Empty card (nothing playing)
 
     private var emptyCard: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 12) {
             Image(systemName: "music.note")
-                .font(.system(size: 44, weight: .light))
+                .font(.system(size: 40, weight: .light))
                 .foregroundColor(Self.ink.opacity(0.3))
 
             Text(L10n.nothingPlaying)
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(Self.ink.opacity(0.7))
 
             Text(L10n.nothingPlayingHint)
-                .font(.system(size: 12, weight: .regular))
+                .font(.system(size: 11, weight: .regular))
                 .foregroundColor(Self.ink.opacity(0.4))
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(32)
-        .frame(maxWidth: 360)
+        .padding(24)
+        .frame(maxWidth: 320)
     }
 
     // MARK: - Warning cards (host outdated / chinese app detected)
@@ -291,31 +291,31 @@ struct ExpandedView: View {
         hint: String,
         tint: Color
     ) -> some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 12) {
             Image(systemName: symbol)
-                .font(.system(size: 40, weight: .regular))
+                .font(.system(size: 36, weight: .regular))
                 .foregroundColor(tint)
 
             Text(title)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundColor(Self.ink.opacity(0.9))
                 .multilineTextAlignment(.center)
 
             Text(hint)
-                .font(.system(size: 12, weight: .regular))
+                .font(.system(size: 11, weight: .regular))
                 .foregroundColor(Self.ink.opacity(0.55))
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .lineSpacing(2)
         }
-        .padding(28)
-        .frame(maxWidth: 380)
+        .padding(22)
+        .frame(maxWidth: 340)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color.white.opacity(0.04))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
         )
     }
@@ -359,7 +359,7 @@ private struct TransportIconButton: View {
             Image(systemName: symbol)
                 .font(.system(size: size, weight: .semibold))
                 .foregroundColor(isHovered ? Self.lime : Color.white.opacity(0.75))
-                .frame(width: 44, height: 44)
+                .frame(width: 36, height: 36)
                 .background(
                     Circle()
                         .fill(Color.white.opacity(isHovered ? 0.10 : 0.0))

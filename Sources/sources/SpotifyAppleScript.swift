@@ -34,28 +34,34 @@ enum SpotifyAppleScript {
     // MARK: - Fetch
 
     static func fetch() async -> AppleScriptTrackInfo? {
+        // `with timeout of 2 seconds` bounds the tell block; if Spotify hangs,
+        // AppleScript raises errAETimeout (-1712) and our Swift layer returns
+        // nil so the source router can move on instead of the serial queue
+        // stalling for the default 120-second AppleEvent timeout.
         let script = """
         tell application "System Events"
             if not (exists process "Spotify") then return "NOT_RUNNING"
         end tell
-        tell application "Spotify"
-            if player state is playing or player state is paused then
-                set trackName to name of current track
-                set trackArtist to artist of current track
-                set trackAlbum to album of current track
-                set trackDuration to duration of current track
-                set trackPosition to player position
-                set stateString to "PAUSED"
-                if player state is playing then set stateString to "PLAYING"
-                set artURL to ""
-                try
-                    set artURL to artwork url of current track
-                end try
-                return stateString & "||" & trackName & "||" & trackArtist & "||" & trackAlbum & "||" & (trackDuration / 1000) & "||" & trackPosition & "||" & artURL
-            else
-                return "NOT_PLAYING"
-            end if
-        end tell
+        with timeout of 2 seconds
+            tell application "Spotify"
+                if player state is playing or player state is paused then
+                    set trackName to name of current track
+                    set trackArtist to artist of current track
+                    set trackAlbum to album of current track
+                    set trackDuration to duration of current track
+                    set trackPosition to player position
+                    set stateString to "PAUSED"
+                    if player state is playing then set stateString to "PLAYING"
+                    set artURL to ""
+                    try
+                        set artURL to artwork url of current track
+                    end try
+                    return stateString & "||" & trackName & "||" & trackArtist & "||" & trackAlbum & "||" & (trackDuration / 1000) & "||" & trackPosition & "||" & artURL
+                else
+                    return "NOT_PLAYING"
+                end if
+            end tell
+        end timeout
         """
 
         guard let raw = await runAppleScript(script, tag: "spotify") else { return nil }
@@ -87,13 +93,15 @@ enum SpotifyAppleScript {
         tell application "System Events"
             if not (exists process "Spotify") then return ""
         end tell
-        tell application "Spotify"
-            try
-                return artwork url of current track
-            on error
-                return ""
-            end try
-        end tell
+        with timeout of 2 seconds
+            tell application "Spotify"
+                try
+                    return artwork url of current track
+                on error
+                    return ""
+                end try
+            end tell
+        end timeout
         """
         guard let urlString = await runAppleScript(script, tag: "spotify-art"),
               !urlString.isEmpty,

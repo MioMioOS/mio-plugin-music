@@ -35,7 +35,7 @@ final class MusicPlugin: NSObject, MioPlugin {
     var id: String { "music-player" }
     var name: String { "Music Player" }
     var icon: String { "music.note" }
-    var version: String { "2.0.0" }
+    var version: String { "2.0.1" }
 
     func activate() {
         NSLog("[mio-plugin-music] activate")
