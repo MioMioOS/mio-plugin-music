@@ -12,7 +12,7 @@
 import AppKit
 
 enum AppleMusicAppleScript {
-    private static let bundleId = "com.apple.Music"
+    static let bundleId = "com.apple.Music"
     private static let sourceName = "Apple Music"
 
     // MARK: - Fetch
@@ -63,6 +63,45 @@ enum AppleMusicAppleScript {
             source: sourceName,
             bundleId: bundleId
         )
+    }
+
+    // MARK: - Artwork
+
+    /// Apple Music stores artwork as embedded raw data (PNG/JPEG) rather than
+    /// a URL. The cheapest way to pull it via AppleScript is to write the
+    /// bytes to a temp file and load NSImage from it. The script writes to
+    /// /tmp/mio-apple-music-art.dat (fixed path — overwrites each call).
+    static func fetchArtwork() async -> NSImage? {
+        let tmpPath = "/tmp/mio-plugin-music-current-art.dat"
+        let script = """
+        tell application "System Events"
+            if not (exists process "Music") then return "NOT_RUNNING"
+        end tell
+        with timeout of 3 seconds
+            tell application "Music"
+                if player state is stopped then return "STOPPED"
+                try
+                    set artData to data of artwork 1 of current track
+                    set f to open for access POSIX file "\(tmpPath)" with write permission
+                    set eof f to 0
+                    write artData to f
+                    close access f
+                    return "OK"
+                on error errMsg
+                    try
+                        close access POSIX file "\(tmpPath)"
+                    end try
+                    return "NO_ARTWORK"
+                end try
+            end tell
+        end timeout
+        """
+        guard let raw = await runAppleScript(script, tag: "music-art"),
+              raw == "OK" else {
+            return nil
+        }
+        let url = URL(fileURLWithPath: tmpPath)
+        return await Task.detached { NSImage(contentsOf: url) }.value
     }
 
     // MARK: - Controls

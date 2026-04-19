@@ -15,10 +15,21 @@
     <key>CFBundlePackageType</key>
     <string>BNDL</string>
     <key>CFBundleShortVersionString</key>
-    <string>2.0.1</string>
+    <string>2.0.3</string>
     <key>CFBundleVersion</key>
-    <string>3</string>
+    <string>5</string>
     <key>NSPrincipalClass</key>
     <string>MusicPlugin.MusicPlugin</string>
+    <!--
+        Optional size hint for the expanded plugin panel.
+        Host reads these on plugin load and caps the expanded area to the
+        requested dimensions instead of the default ~620x780. Both keys
+        must be present. Range: width 280-1200, height 180-900. Values
+        outside that range are ignored and the host falls back to default.
+    -->
+    <key>MioPluginPreferredWidth</key>
+    <integer>440</integer>
+    <key>MioPluginPreferredHeight</key>
+    <integer>340</integer>
 </dict>
 </plist>

@@ -124,11 +124,21 @@ final class NowPlayingState: ObservableObject {
             object: nil
         )
 
-        // Observe Apple Music similarly.
+        // Observe Apple Music. macOS 15+ Music.app emits
+        // com.apple.Music.playerInfo; older iTunes emitted
+        // com.apple.iTunes.playerInfo. Register both so track changes are
+        // picked up instantly regardless of which one the current build
+        // broadcasts.
         DistributedNotificationCenter.default().addObserver(
             self,
             selector: #selector(musicStateChanged),
             name: NSNotification.Name("com.apple.Music.playerInfo"),
+            object: nil
+        )
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(musicStateChanged),
+            name: NSNotification.Name("com.apple.iTunes.playerInfo"),
             object: nil
         )
 
@@ -160,7 +170,11 @@ final class NowPlayingState: ObservableObject {
 
     private func startPolling() {
         pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+        // 1.5s poll balances track-change detection latency (previously 3s)
+        // against the cost of repeated AppleScript probes. At 1.5s, switching
+        // between tracks in Apple Music typically reflects in the UI within
+        // two seconds including AppleScript round-trip.
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
     }
@@ -242,6 +256,12 @@ final class NowPlayingState: ObservableObject {
         case .appleMusic:
             guard let info = await AppleMusicAppleScript.fetch(), !info.title.isEmpty else { return nil }
             await MainActor.run { self.apply(appleScript: info) }
+            // Apple Music doesn't expose an artwork URL via AppleScript;
+            // we dump the raw bytes to /tmp and reload. Only refetch when
+            // the track identity actually changes to avoid hammering disk.
+            if self.albumArt == nil, let art = await AppleMusicAppleScript.fetchArtwork() {
+                await MainActor.run { self.albumArt = art }
+            }
             return .appleMusic
 
         case .chrome:
@@ -272,6 +292,11 @@ final class NowPlayingState: ObservableObject {
     }
 
     private func apply(appleScript info: AppleScriptTrackInfo) {
+        // Track changed → drop cached artwork so the source can refetch
+        // (Spotify does URL-based, Apple Music does raw-bytes-via-temp-file).
+        if self.title != info.title || self.artist != info.artist {
+            self.albumArt = nil
+        }
         self.title = info.title
         self.artist = info.artist
         self.album = info.album

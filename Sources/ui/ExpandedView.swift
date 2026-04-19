@@ -44,14 +44,16 @@ struct ExpandedView: View {
     // MARK: - Body
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .center) {
             AlbumArtColorExtractor
                 .backgroundGradient(for: tintColor)
                 .ignoresSafeArea()
 
+            // ZStack's default alignment centers children to their intrinsic
+            // size. We rely on that instead of a .frame wrapper so content
+            // doesn't get silently stretched vertically.
             content
                 .padding(20)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Self.base)
@@ -108,12 +110,16 @@ struct ExpandedView: View {
 
     private var playingCard: some View {
         VStack(spacing: 16) {
-            // Hero row: album art left, metadata + source badge right
+            // Hero row: album art left, metadata + source badge right.
+            // We bound the HStack to the album art height (128) so the meta
+            // column can't propagate a fill-height hint up to the outer
+            // VStack. (Previous version let an inner Spacer bleed through,
+            // which shoved the progress bar and controls to the panel's
+            // bottom edge with ~500pt of dead space in the middle.)
             HStack(alignment: .top, spacing: 14) {
                 albumArt
 
                 VStack(alignment: .leading, spacing: 4) {
-                    // Source badge, flush right with the artwork top
                     HStack {
                         Spacer()
                         sourceBadge
@@ -136,11 +142,10 @@ struct ExpandedView: View {
                             .foregroundColor(Self.ink.opacity(0.45))
                             .lineLimit(1)
                     }
-
-                    Spacer(minLength: 0)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
+            .frame(height: 128)
 
             // Progress + times inline on one row
             VStack(spacing: 6) {
