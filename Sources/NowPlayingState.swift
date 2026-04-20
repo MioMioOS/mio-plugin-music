@@ -222,18 +222,48 @@ final class NowPlayingState: ObservableObject {
     // MARK: - Polling
 
     private func startPolling() {
+        rearmPoll()
+    }
+
+    /// Adaptive poll interval — the event-driven fast paths aren't uniformly
+    /// reliable across players on modern macOS:
+    ///   - Spotify: com.spotify.client.PlaybackStateChanged fires instantly
+    ///     on every track change → 10s safety-net is plenty.
+    ///   - Apple Music: com.apple.Music.playerInfo is NOT reliably broadcast
+    ///     on macOS 14+ (Apple stopped posting it in many builds). Combined
+    ///     with MediaRemote's 15.4+ entitlement gate, there is literally no
+    ///     event source left, so we have to poll. 0.8s gets track changes
+    ///     visible inside 1s which is the best we can do without the
+    ///     Atoll-style adapter framework.
+    ///   - Chrome / web players: no notifications at all. 1.2s poll is a
+    ///     reasonable tradeoff between latency and CPU.
+    ///   - Idle / nothing playing: 10s is fine — the NSWorkspace launch
+    ///     observer will wake us instantly when a music app opens.
+    /// Recomputed and re-armed every time `stickySource` or `isPlaying`
+    /// changes, so the plugin idles cheaply until it has something to track.
+    private var currentPollInterval: TimeInterval = 10.0
+
+    private func adaptivePollInterval() -> TimeInterval {
+        switch stickySource {
+        case .appleMusic where isPlaying: return 0.8
+        case .chrome where isPlaying:     return 1.2
+        case .spotify where isPlaying:    return 3.0 // event-driven, poll is just backup
+        case .mediaRemote where isPlaying: return 3.0
+        default: return 10.0
+        }
+    }
+
+    private func rearmPoll() {
+        let newInterval = adaptivePollInterval()
+        // Avoid invalidating the timer on every refresh when the interval
+        // didn't actually change — Timer allocs aren't free and the router
+        // calls rearmPoll() after every successful fetch.
+        if let t = pollTimer, t.isValid, abs(newInterval - currentPollInterval) < 0.01 {
+            return
+        }
         pollTimer?.invalidate()
-        // 15s safety-net poll. The fast path is now fully event-driven:
-        //   - MediaRemote notifications (instant, when not 15.4-blocked)
-        //   - DistributedNotificationCenter for Spotify / Music / iTunes
-        //     playerInfo broadcasts (instant, fires on every track change)
-        //   - NSWorkspace app launch/terminate observers (instant)
-        // The poll only exists to catch web players (no notifications) and
-        // to recover from any missed distributed broadcast. Going from 1.5s
-        // → 15s cuts the AppleScript wake-up rate by 10x without hurting
-        // perceived latency, because every real state change hits one of
-        // the three event paths in under 100ms.
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { [weak self] _ in
+        currentPollInterval = newInterval
+        pollTimer = Timer.scheduledTimer(withTimeInterval: newInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
     }
@@ -289,6 +319,7 @@ final class NowPlayingState: ObservableObject {
                 await MainActor.run {
                     self.stickySource = used
                     self.updatePlaybackTimer()
+                    self.rearmPoll()
                 }
                 return
             }
@@ -329,6 +360,7 @@ final class NowPlayingState: ObservableObject {
                 self.apply(mediaRemote: info)
                 self.stickySource = .mediaRemote
                 self.updatePlaybackTimer()
+                self.rearmPoll()
             }
             return
         }
@@ -337,6 +369,7 @@ final class NowPlayingState: ObservableObject {
                 self.apply(appleScript: info)
                 self.stickySource = .spotify
                 self.updatePlaybackTimer()
+                self.rearmPoll()
             }
             if self.albumArt == nil, let art = await SpotifyAppleScript.fetchArtwork() {
                 await MainActor.run { self.albumArt = art }
@@ -348,6 +381,7 @@ final class NowPlayingState: ObservableObject {
                 self.apply(appleScript: info)
                 self.stickySource = .appleMusic
                 self.updatePlaybackTimer()
+                self.rearmPoll()
             }
             if self.albumArt == nil, let art = await AppleMusicAppleScript.fetchArtwork() {
                 await MainActor.run { self.albumArt = art }
@@ -359,6 +393,7 @@ final class NowPlayingState: ObservableObject {
                 self.apply(chrome: info)
                 self.stickySource = .chrome
                 self.updatePlaybackTimer()
+                self.rearmPoll()
             }
             if let artURL = info.artworkURL, let url = URL(string: artURL) {
                 if let image = await downloadImage(from: url) {
@@ -373,6 +408,7 @@ final class NowPlayingState: ObservableObject {
             self.clearTrack()
             self.stickySource = .none
             self.updatePlaybackTimer()
+            self.rearmPoll()
         }
     }
 
@@ -544,6 +580,7 @@ final class NowPlayingState: ObservableObject {
         let shouldPlay = !isPlaying
         isPlaying = shouldPlay
         updatePlaybackTimer()
+        rearmPoll() // isPlaying flipped → maybe change poll cadence
 
         switch stickySource {
         case .spotify:
