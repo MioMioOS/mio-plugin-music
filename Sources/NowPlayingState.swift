@@ -31,6 +31,10 @@ import Combine
 
 enum NowPlayingSourceKind: String {
     case none
+    /// Atoll-style MediaRemoteAdapter subprocess stream — bypasses the
+    /// macOS 15.4+ entitlement gate and gives us real-time system Now
+    /// Playing with artwork, duration, and elapsed time.
+    case mediaRemoteAdapter
     case mediaRemote
     case spotify
     case appleMusic
@@ -92,6 +96,11 @@ final class NowPlayingState: ObservableObject {
     // MARK: - Private
 
     private let mediaRemote = MediaRemoteSource()
+    /// Atoll-style subprocess adapter. Optional because the bundle may be
+    /// missing the Resources/mediaremote-adapter payload (dev builds, old
+    /// plugin versions). When non-nil, it becomes the primary source and
+    /// most of the legacy polling / AppleScript chain stays dormant.
+    private let mediaRemoteAdapter: MediaRemoteAdapterSource? = MediaRemoteAdapterSource()
     private var pollTimer: Timer?
     private var playbackTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
@@ -128,6 +137,17 @@ final class NowPlayingState: ObservableObject {
 
         mediaRemote.registerForNotifications { [weak self] in
             Task { @MainActor in self?.refresh() }
+        }
+
+        // Start the Atoll-style adapter subprocess if bundled. This is
+        // the PRIMARY low-latency source — on 15.4+ it's the only one that
+        // actually produces live data without AppleScript polling. When
+        // it emits, we short-circuit the router entirely.
+        if let adapter = mediaRemoteAdapter {
+            adapter.onUpdate = { [weak self] info in
+                Task { @MainActor in self?.applyAdapterUpdate(info) }
+            }
+            adapter.start()
         }
 
         // Observe Spotify distributed notifications for instant reaction.
@@ -209,6 +229,8 @@ final class NowPlayingState: ObservableObject {
             wsCenter.removeObserver(token)
         }
         workspaceObservers.removeAll()
+
+        mediaRemoteAdapter?.stop()
     }
 
     @objc private func spotifyStateChanged() {
@@ -245,6 +267,9 @@ final class NowPlayingState: ObservableObject {
 
     private func adaptivePollInterval() -> TimeInterval {
         switch stickySource {
+        // Adapter subprocess pushes data in real time — poll only as a
+        // last-resort safety net in case the subprocess silently wedges.
+        case .mediaRemoteAdapter:         return 30.0
         case .appleMusic where isPlaying: return 0.8
         case .chrome where isPlaying:     return 1.2
         case .spotify where isPlaying:    return 3.0 // event-driven, poll is just backup
@@ -287,6 +312,17 @@ final class NowPlayingState: ObservableObject {
     }
 
     private func routeSources(allowAppleScript: Bool) async {
+        // Adapter short-circuit: when the subprocess is the sticky source
+        // and we already have a track from it, there's nothing to do here —
+        // new data will arrive via `applyAdapterUpdate(_:)` whenever it
+        // actually changes. Polling on top of an event-driven source just
+        // wastes AppleScript round-trips.
+        if stickySource == .mediaRemoteAdapter,
+           !title.isEmpty,
+           mediaRemoteAdapter != nil {
+            return
+        }
+
         // Running-app snapshot — read once per pass so we don't hit the
         // workspace API four times.
         let spotifyRunning = SpotifyAppleScript.isRunning
@@ -425,6 +461,7 @@ final class NowPlayingState: ObservableObject {
     ) -> Bool {
         switch kind {
         case .none: return false
+        case .mediaRemoteAdapter: return false // push-only, not candidate for pull-fetch
         case .mediaRemote: return !mrBlocked
         case .spotify: return allowAppleScript && spotifyRunning
         case .appleMusic: return allowAppleScript && musicRunning
@@ -456,6 +493,10 @@ final class NowPlayingState: ObservableObject {
     private func tryFetch(_ kind: NowPlayingSourceKind) async -> NowPlayingSourceKind? {
         switch kind {
         case .none:
+            return nil
+
+        case .mediaRemoteAdapter:
+            // Push-only source; pull-fetch is a no-op.
             return nil
 
         case .mediaRemote:
@@ -500,6 +541,43 @@ final class NowPlayingState: ObservableObject {
     }
 
     // MARK: - Apply
+
+    /// Called when the Atoll-style subprocess adapter emits a fresh payload.
+    /// This bypasses the full router — adapter updates are the truest signal
+    /// we have on 15.4+, so we claim sticky-source and publish straight away.
+    private func applyAdapterUpdate(_ info: MediaRemoteInfo) {
+        self.title = info.title
+        self.artist = info.artist
+        self.album = info.album
+        self.duration = info.duration
+        self.elapsedTime = info.elapsedTime
+        self.isPlaying = info.isPlaying
+        if let art = info.artwork {
+            self.albumArt = art
+        }
+        // Source name from bundle id for the UI chip. Apple Music → "Apple Music"
+        // etc. Unknown bundle ids fall back to generic "System Media".
+        self.sourceBundleId = info.bundleIdentifier
+        self.sourceName = Self.humanReadableSource(bundleId: info.bundleIdentifier)
+        self.lastChromeTabURL = ""
+        self.stickySource = .mediaRemoteAdapter
+        self.updatePlaybackTimer()
+        self.rearmPoll()
+    }
+
+    private static func humanReadableSource(bundleId: String) -> String {
+        switch bundleId {
+        case "com.apple.Music":                    return "Apple Music"
+        case "com.spotify.client":                 return "Spotify"
+        case "com.google.Chrome":                  return "Chrome"
+        case "com.apple.Safari":                   return "Safari"
+        case "com.microsoft.edgemac":              return "Edge"
+        case "com.apple.podcasts":                 return "Podcasts"
+        case "com.apple.tv":                       return "Apple TV"
+        default:
+            return bundleId.components(separatedBy: ".").last?.capitalized ?? "System Media"
+        }
+    }
 
     private func apply(mediaRemote info: MediaRemoteInfo) {
         self.title = info.title
@@ -583,6 +661,8 @@ final class NowPlayingState: ObservableObject {
         rearmPoll() // isPlaying flipped → maybe change poll cadence
 
         switch stickySource {
+        case .mediaRemoteAdapter:
+            mediaRemoteAdapter?.sendCommand(2) // kMRATogglePlayPause
         case .spotify:
             SpotifyAppleScript.togglePlay()
         case .appleMusic:
@@ -600,6 +680,8 @@ final class NowPlayingState: ObservableObject {
 
     func nextTrack() {
         switch stickySource {
+        case .mediaRemoteAdapter:
+            mediaRemoteAdapter?.sendCommand(4) // kMRANextTrack
         case .spotify:
             SpotifyAppleScript.next()
         case .appleMusic:
@@ -615,6 +697,8 @@ final class NowPlayingState: ObservableObject {
 
     func previousTrack() {
         switch stickySource {
+        case .mediaRemoteAdapter:
+            mediaRemoteAdapter?.sendCommand(5) // kMRAPreviousTrack
         case .spotify:
             SpotifyAppleScript.previous()
         case .appleMusic:
@@ -633,6 +717,8 @@ final class NowPlayingState: ObservableObject {
         updatePlaybackTimer()
 
         switch stickySource {
+        case .mediaRemoteAdapter:
+            mediaRemoteAdapter?.seek(clamped)
         case .spotify:
             SpotifyAppleScript.seek(to: clamped)
         case .appleMusic:

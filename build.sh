@@ -29,8 +29,24 @@ swiftc \
 # Copy Info.plist
 cp Info.plist "${BUILD_DIR}/${BUNDLE_NAME}/Contents/"
 
-# Ad-hoc sign
-codesign --force --sign - "${BUILD_DIR}/${BUNDLE_NAME}"
+# Bundle the MediaRemoteAdapter subprocess payload (Atoll-style).
+# Resources/ contains `MediaRemoteAdapter.framework` + `mediaremote-adapter.pl`.
+# Both are BSD-3-Clause by Jonas van den Berg (see LICENSE-THIRD-PARTY.md).
+# We copy Resources/* into Contents/Resources so MediaRemoteAdapterSource
+# can find them via Bundle(for:).path(forResource:ofType:).
+if [ -d "Resources" ]; then
+  mkdir -p "${BUILD_DIR}/${BUNDLE_NAME}/Contents/Resources"
+  cp -R Resources/* "${BUILD_DIR}/${BUNDLE_NAME}/Contents/Resources/"
+  # Preserve framework executable bit (cp -R should, but be defensive)
+  chmod +x "${BUILD_DIR}/${BUNDLE_NAME}/Contents/Resources/MediaRemoteAdapter.framework/MediaRemoteAdapter" 2>/dev/null || true
+  chmod +x "${BUILD_DIR}/${BUNDLE_NAME}/Contents/Resources/mediaremote-adapter.pl"
+fi
+
+# Ad-hoc sign the WHOLE bundle including the nested framework. Passing
+# --deep traverses nested code signatures and re-signs them with our
+# ad-hoc identity so the framework loads without Gatekeeper complaints
+# when the plugin is dropped into ~/.config/codeisland/plugins/.
+codesign --force --deep --sign - "${BUILD_DIR}/${BUNDLE_NAME}"
 
 echo "✓ Built ${BUILD_DIR}/${BUNDLE_NAME}"
 
