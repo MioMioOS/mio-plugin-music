@@ -45,15 +45,27 @@ struct ExpandedView: View {
 
     var body: some View {
         ZStack(alignment: .center) {
-            AlbumArtColorExtractor
-                .backgroundGradient(for: tintColor)
-                .ignoresSafeArea()
+            // V2 Immersive backdrop — applied only when actually playing,
+            // other modes (empty / warning) use the plain near-black base.
+            if currentMode == .playing {
+                immersiveBackdrop
+                    .ignoresSafeArea()
+            }
 
-            // ZStack's default alignment centers children to their intrinsic
-            // size. We rely on that instead of a .frame wrapper so content
-            // doesn't get silently stretched vertically.
             content
                 .padding(20)
+
+            // Top-right float-window toggle only when playing.
+            if currentMode == .playing {
+                VStack {
+                    HStack {
+                        Spacer()
+                        floatWindowToggle
+                    }
+                    Spacer()
+                }
+                .padding(14)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Self.base)
@@ -62,6 +74,57 @@ struct ExpandedView: View {
             refreshTint(for: state.albumArt)
         }
         .animation(.easeInOut(duration: 0.25), value: currentMode)
+    }
+
+    /// V2 Immersive backdrop: blurred enlarged album art + dark gradient
+    /// overlay (35% → 72% → 92%). Falls back to a solid base when no art.
+    @ViewBuilder
+    private var immersiveBackdrop: some View {
+        if let art = state.albumArt {
+            ZStack {
+                Image(nsImage: art)
+                    .resizable()
+                    .scaledToFill()
+                    .saturation(1.4)
+                    .blur(radius: 40, opaque: true)
+                    .scaleEffect(1.3)
+                    .clipped()
+                LinearGradient(
+                    gradient: Gradient(stops: [
+                        .init(color: Self.base.opacity(0.35), location: 0.0),
+                        .init(color: Self.base.opacity(0.72), location: 0.55),
+                        .init(color: Self.base.opacity(0.92), location: 1.0)
+                    ]),
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+        } else {
+            AlbumArtColorExtractor.backgroundGradient(for: tintColor)
+        }
+    }
+
+    /// Pin/float button that toggles the desktop lyrics overlay.
+    /// Icon is static (`pip.enter`) — we don't observe the window to keep
+    /// this view free of a @StateObject dependency. The window itself is
+    /// the visibility signal.
+    private var floatWindowToggle: some View {
+        Button {
+            DesktopLyricsWindow.shared.toggle()
+        } label: {
+            Image(systemName: "pip.enter")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(Self.ink.opacity(0.85))
+                .frame(width: 28, height: 28)
+                .background(
+                    Circle().fill(Color.black.opacity(0.35))
+                )
+                .overlay(
+                    Circle().strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
+                )
+        }
+        .buttonStyle(.plain)
+        .help(L10n.floatLyricsTooltip)
     }
 
     // MARK: - State routing
@@ -109,69 +172,57 @@ struct ExpandedView: View {
     // MARK: - Playing card — compact horizontal layout
 
     private var playingCard: some View {
-        VStack(spacing: 16) {
-            // Hero row: album art left, metadata + source badge right.
-            // We bound the HStack to the album art height (128) so the meta
-            // column can't propagate a fill-height hint up to the outer
-            // VStack. (Previous version let an inner Spacer bleed through,
-            // which shoved the progress bar and controls to the panel's
-            // bottom edge with ~500pt of dead space in the middle.)
-            HStack(alignment: .top, spacing: 14) {
-                albumArt
+        // V2 Immersive layout — centered column: cover 120 → title → artist
+        // → progress → controls with outline play button. Matches the
+        // Claude Design CodeIsland Music.html V2 spec.
+        VStack(spacing: 14) {
+            // Large centered album art — shadow drops onto blurred backdrop
+            albumArt
+                .frame(width: 120, height: 120)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Spacer()
-                        sourceBadge
-                    }
+            VStack(spacing: 4) {
+                Text(state.title.isEmpty ? L10n.unknownTitle : state.title)
+                    .font(.system(size: 19, weight: .semibold))
+                    .tracking(-0.35)
+                    .foregroundColor(Self.ink)
+                    .lineLimit(1)
+                    .shadow(color: .black.opacity(0.35), radius: 6, y: 2)
 
-                    Text(state.title.isEmpty ? L10n.unknownTitle : state.title)
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundColor(Self.ink)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    Text(state.artist.isEmpty ? L10n.unknownArtist : state.artist)
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundColor(Self.ink.opacity(0.75))
-                        .lineLimit(1)
-
-                    if !state.album.isEmpty {
-                        Text(state.album)
-                            .font(.system(size: 11, weight: .regular))
-                            .foregroundColor(Self.ink.opacity(0.45))
-                            .lineLimit(1)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+                Text(state.artist.isEmpty ? L10n.unknownArtist : state.artist)
+                    .font(.system(size: 13))
+                    .foregroundColor(Self.ink.opacity(0.78))
+                    .lineLimit(1)
             }
-            .frame(height: 128)
+            .frame(maxWidth: 360)
 
-            // Progress + times inline on one row
-            VStack(spacing: 6) {
+            // Source chip (below artist, subtle)
+            sourceBadge
+
+            // Progress bar + times
+            VStack(spacing: 8) {
                 SeekBar(
                     progress: state.progress,
                     duration: state.duration
                 ) { newTime in
                     state.seek(to: newTime)
                 }
-
                 HStack {
                     Text(state.formattedElapsed)
-                        .font(.system(size: 10, weight: .regular, design: .monospaced))
-                        .foregroundColor(Self.ink.opacity(0.5))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(Self.ink.opacity(0.55))
                     Spacer()
                     Text(state.formattedDuration)
-                        .font(.system(size: 10, weight: .regular, design: .monospaced))
-                        .foregroundColor(Self.ink.opacity(0.5))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(Self.ink.opacity(0.55))
                 }
             }
+            .padding(.top, 6)
 
-            // Transport controls
+            Spacer(minLength: 0)
+
             transportControls
-                .padding(.top, 2)
         }
-        .frame(maxWidth: 460)
+        .frame(maxWidth: 380)
     }
 
     private var albumArt: some View {
@@ -180,12 +231,10 @@ struct ExpandedView: View {
                 Image(nsImage: art)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .frame(width: 128, height: 128)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             } else {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(Color.white.opacity(0.08))
-                    .frame(width: 128, height: 128)
                     .overlay(
                         Image(systemName: "music.note")
                             .font(.system(size: 34, weight: .light))
@@ -193,7 +242,7 @@ struct ExpandedView: View {
                     )
             }
         }
-        .shadow(color: .black.opacity(0.35), radius: 14, x: 0, y: 6)
+        .shadow(color: .black.opacity(0.5), radius: 22, x: 0, y: 10)
     }
 
     private var sourceBadge: some View {
@@ -227,15 +276,18 @@ struct ExpandedView: View {
             }
 
             // Play / pause — accent button, slightly smaller than v2.0.0 (48 vs 56)
+            // V2 Immersive: outline play button (1.5px 85% white) — lets the
+            // blurred album backdrop breathe through instead of punching a
+            // big lime disc that fights the art.
             Button(action: { state.togglePlayPause() }) {
                 ZStack {
                     Circle()
-                        .fill(Self.lime)
+                        .strokeBorder(Self.ink.opacity(0.85), lineWidth: 1.5)
                         .frame(width: 48, height: 48)
                     Image(systemName: state.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(.black)
-                        .offset(x: state.isPlaying ? 0 : 2)  // optical nudge for play glyph
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(Self.ink)
+                        .offset(x: state.isPlaying ? 0 : 2)
                 }
             }
             .buttonStyle(.plain)

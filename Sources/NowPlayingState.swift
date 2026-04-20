@@ -75,6 +75,15 @@ final class NowPlayingState: ObservableObject {
     /// 暂不支持，请使用网页版" hint.
     @Published var chineseAppDetected: String?
 
+    /// Parsed synced lyrics from LRCLIB after every track change. Empty
+    /// array = we tried, nothing found (instrumentals / obscure tracks).
+    @Published var syncedLyrics: [LyricLine] = []
+
+    /// Index into `syncedLyrics` for the current playhead. -1 means no
+    /// lyrics loaded OR elapsedTime < first line's timestamp. Updated
+    /// by the playback timer every second.
+    @Published var currentLyricIndex: Int = -1
+
     // MARK: - Derived
 
     var progress: Double {
@@ -546,6 +555,9 @@ final class NowPlayingState: ObservableObject {
     /// This bypasses the full router — adapter updates are the truest signal
     /// we have on 15.4+, so we claim sticky-source and publish straight away.
     private func applyAdapterUpdate(_ info: MediaRemoteInfo) {
+        // Detect track change BEFORE we overwrite the fields.
+        let trackChanged = (self.title != info.title) || (self.artist != info.artist)
+
         self.title = info.title
         self.artist = info.artist
         self.album = info.album
@@ -563,6 +575,63 @@ final class NowPlayingState: ObservableObject {
         self.stickySource = .mediaRemoteAdapter
         self.updatePlaybackTimer()
         self.rearmPoll()
+
+        if trackChanged {
+            // Drop stale lyrics and fetch fresh ones from LRCLIB.
+            self.syncedLyrics = []
+            self.currentLyricIndex = -1
+            refreshLyrics()
+        } else {
+            // Same track, but possibly a seek or pause/resume — recompute
+            // the current-lyric index immediately instead of waiting for
+            // the next playback-timer tick.
+            updateCurrentLyricIndex()
+        }
+    }
+
+    /// Pull synced lyrics from LRCLIB for the current track and publish.
+    /// Runs off the main actor (network I/O) but the @Published update
+    /// hops back to main. No-op when title/artist are missing — spares
+    /// LRCLIB a pointless round-trip.
+    private func refreshLyrics() {
+        let t = title, a = artist, al = album, d = duration
+        guard !t.isEmpty, !a.isEmpty else { return }
+        Task.detached(priority: .utility) { [weak self] in
+            let lines = await LyricsService.fetch(
+                artist: a, title: t, album: al, duration: d
+            )
+            await MainActor.run {
+                guard let self else { return }
+                // Only adopt if the user hasn't moved on to another track
+                // during the network call (LRCLIB can take 1-2s on misses).
+                guard self.title == t, self.artist == a else { return }
+                self.syncedLyrics = lines
+                self.currentLyricIndex = -1
+                self.updateCurrentLyricIndex()
+            }
+        }
+    }
+
+    /// Find the lyric line whose timestamp ≤ current elapsedTime. Binary
+    /// search since lines are sorted. Only publishes if the index actually
+    /// changed — prevents unnecessary SwiftUI redraws every tick.
+    func updateCurrentLyricIndex() {
+        guard !syncedLyrics.isEmpty else {
+            if currentLyricIndex != -1 { currentLyricIndex = -1 }
+            return
+        }
+        var newIndex = -1
+        // Linear scan is fine — typical lyric line counts are 30–80.
+        for (i, line) in syncedLyrics.enumerated() {
+            if elapsedTime >= line.timestamp {
+                newIndex = i
+            } else {
+                break
+            }
+        }
+        if newIndex != currentLyricIndex {
+            currentLyricIndex = newIndex
+        }
     }
 
     private static func humanReadableSource(bundleId: String) -> String {
@@ -643,6 +712,7 @@ final class NowPlayingState: ObservableObject {
             Task { @MainActor in
                 guard let self, self.isPlaying else { return }
                 self.elapsedTime = min(self.elapsedTime + 1.0, self.duration)
+                self.updateCurrentLyricIndex()
                 if self.elapsedTime >= self.duration {
                     self.playbackTimer?.invalidate()
                     self.playbackTimer = nil

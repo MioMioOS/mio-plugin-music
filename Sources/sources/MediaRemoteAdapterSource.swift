@@ -31,9 +31,9 @@ import Foundation
 
 // MARK: - Stream payload (subset of adapter output)
 
-/// Raw JSON shape emitted by the adapter in stream mode. Only the keys we
-/// actually consume are decoded; the adapter also emits `contentItemIdentifier`,
-/// `radioStationHash`, `timestamp`, etc. which we ignore.
+/// The track-level payload. Only the keys we consume are decoded;
+/// adapter also emits `composer`, `contentItemIdentifier`,
+/// `radioStationHash`, `timestamp` etc. which we ignore.
 private struct AdapterStreamPayload: Decodable {
     var title: String?
     var artist: String?
@@ -43,9 +43,20 @@ private struct AdapterStreamPayload: Decodable {
     var playbackRate: Double?
     var playing: Bool?
     var bundleIdentifier: String?
-    /// Base64-encoded artwork data. JSONDecoder automatically decodes
-    /// when the Swift type is `Data` via default `.base64` strategy.
+    /// Base64-encoded artwork data. JSONDecoder decodes Data from base64
+    /// automatically via its default strategy.
     var artworkData: Data?
+}
+
+/// Envelope that wraps every line emitted by `stream` mode. Structure is:
+/// `{"type":"data","diff":<bool>,"payload":{...}}`. `diff: false` means
+/// this is a full state snapshot (initial baseline OR after track change);
+/// `diff: true` means only the changed fields are in payload. `get` mode
+/// emits the payload directly without this envelope.
+private struct AdapterStreamEnvelope: Decodable {
+    var type: String?
+    var diff: Bool?
+    var payload: AdapterStreamPayload?
 }
 
 // MARK: - Source
@@ -194,10 +205,50 @@ final class MediaRemoteAdapterSource {
         do {
             try proc.run()
             process = proc
-            NSLog("[mio-plugin-music] adapter spawned pid=\(proc.processIdentifier)")
+            debugLog("adapter spawned pid=\(proc.processIdentifier)")
+            // Bootstrap — pull current state via one-shot `get`. Covers the
+            // case where the stream subprocess started BEFORE any music app
+            // was opened; in that case the initial stream emit is null/empty,
+            // and no diff comes until something changes. A parallel `get`
+            // catches whatever is playing right now.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.bootstrapGet()
+            }
         } catch {
-            NSLog("[mio-plugin-music] adapter spawn failed: \(error)")
+            debugLog("adapter spawn failed: \(error)")
             scheduleRestart()
+        }
+    }
+
+    private func bootstrapGet() {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+        proc.arguments = [scriptPath, frameworkPath, "get"]
+        proc.environment = ["PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"]
+        let outPipe = Pipe()
+        proc.standardOutput = outPipe
+        proc.standardError = FileHandle(forWritingAtPath: "/dev/null")
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+            let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+            guard !data.isEmpty else {
+                debugLog("bootstrap get returned empty")
+                return
+            }
+            // `get` emits one JSON object to stdout.
+            if let payload = try? JSONDecoder().decode(AdapterStreamPayload.self, from: data) {
+                merge(payload)
+                debugLog("bootstrap get · title=\(currentInfo.title) playing=\(currentInfo.isPlaying)")
+                if currentInfo.hasTrack {
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        self.onUpdate?(self.currentInfo)
+                    }
+                }
+            }
+        } catch {
+            debugLog("bootstrap get failed: \(error)")
         }
     }
 
@@ -217,18 +268,46 @@ final class MediaRemoteAdapterSource {
 
     private func parseLine(_ data: Data) {
         do {
-            let payload = try JSONDecoder().decode(AdapterStreamPayload.self, from: data)
+            let env = try JSONDecoder().decode(AdapterStreamEnvelope.self, from: data)
+            guard env.type == "data" else {
+                debugLog("non-data envelope: \(env.type ?? "nil")")
+                return
+            }
+            guard let payload = env.payload else { return }
+            // Full snapshot (diff=false) → reset, then merge, so stale
+            // fields from the previous track don't leak. Diff (default
+            // or true) → merge only the provided fields.
+            if env.diff == false {
+                currentInfo = MediaRemoteInfo()
+            }
             merge(payload)
+            debugLog("stream rx · diff=\(env.diff ?? true) title=\(currentInfo.title) artist=\(currentInfo.artist) playing=\(currentInfo.isPlaying) hasTrack=\(currentInfo.hasTrack)")
             if currentInfo.hasTrack {
                 onUpdate?(currentInfo)
             }
         } catch {
-            // Not every line is a full object — stream mode sometimes emits
-            // null or empty diff when source goes away. Silent on DecodingError
-            // unless it looks like a real crash (non-JSON prefix).
-            if let preview = String(data: data.prefix(60), encoding: .utf8),
+            if let preview = String(data: data.prefix(80), encoding: .utf8),
                !preview.hasPrefix("{") && !preview.hasPrefix("null") {
-                NSLog("[mio-plugin-music] adapter: unparseable line: \(preview)")
+                debugLog("unparseable line: \(preview)")
+            }
+        }
+    }
+
+    /// File-based debug log — NSLog / os_log are unreliably filtered on
+    /// macOS 15, and we can't attach Xcode to a plugin loaded from a
+    /// signed host. Writing a line-oriented log to /tmp is the one
+    /// channel that always works for post-mortem inspection.
+    private func debugLog(_ msg: String) {
+        let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(msg)\n"
+        let path = "/tmp/mio-plugin-music-debug.log"
+        if let data = line.data(using: .utf8) {
+            if FileManager.default.fileExists(atPath: path),
+               let h = try? FileHandle(forWritingTo: URL(fileURLWithPath: path)) {
+                try? h.seekToEnd()
+                try? h.write(contentsOf: data)
+                try? h.close()
+            } else {
+                try? data.write(to: URL(fileURLWithPath: path))
             }
         }
     }

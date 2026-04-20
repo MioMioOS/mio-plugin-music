@@ -115,4 +115,16 @@ enum L10n {
     static var unknownArtist: String {
         isChinese ? "未知艺术家" : "Unknown Artist"
     }
+
+    static var floatLyricsTooltip: String {
+        isChinese ? "悬浮歌词窗 · 点击切换显示" : "Floating lyrics window · toggle visibility"
+    }
+
+    static var lyricsPlaceholder: String {
+        isChinese ? "歌词暂未接入 · 等待真实数据源" : "Lyrics not wired yet — placeholder"
+    }
+
+    static var lyricsStyleLabel: String {
+        isChinese ? "样式" : "Style"
+    }
 }
