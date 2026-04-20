@@ -31,6 +31,14 @@ struct ChromeTrackInfo {
 enum ChromeWebSource {
     static let bundleId = "com.google.Chrome"
 
+    /// Fast check: is Chrome running? JS-injection probing costs ~200ms
+    /// even on a hot path; skip entirely when Chrome isn't running.
+    static var isRunning: Bool {
+        NSWorkspace.shared.runningApplications.contains {
+            $0.bundleIdentifier == bundleId
+        }
+    }
+
     // MARK: - Fetch
 
     static func fetch() async -> ChromeTrackInfo? {

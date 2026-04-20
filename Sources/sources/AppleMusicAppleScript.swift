@@ -15,6 +15,15 @@ enum AppleMusicAppleScript {
     static let bundleId = "com.apple.Music"
     private static let sourceName = "Apple Music"
 
+    /// Fast check: is Music.app actually running? When false, skip
+    /// AppleScript — the 2s `with timeout` still trips but that's two
+    /// wasted seconds per refresh when the user doesn't use Apple Music.
+    static var isRunning: Bool {
+        NSWorkspace.shared.runningApplications.contains {
+            $0.bundleIdentifier == bundleId
+        }
+    }
+
     // MARK: - Fetch
 
     static func fetch() async -> AppleScriptTrackInfo? {

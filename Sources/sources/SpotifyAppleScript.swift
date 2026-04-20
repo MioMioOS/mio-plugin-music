@@ -28,8 +28,17 @@ struct AppleScriptTrackInfo {
 }
 
 enum SpotifyAppleScript {
-    private static let bundleId = "com.spotify.client"
+    static let bundleId = "com.spotify.client"
     private static let sourceName = "Spotify"
+
+    /// Fast check: is Spotify actually running? When false, skip AppleScript
+    /// entirely — the 2s `with timeout` would still trip but that's two
+    /// wasted seconds per router pass for an app the user isn't using.
+    static var isRunning: Bool {
+        NSWorkspace.shared.runningApplications.contains {
+            $0.bundleIdentifier == bundleId
+        }
+    }
 
     // MARK: - Fetch
 
