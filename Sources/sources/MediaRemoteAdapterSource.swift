@@ -211,7 +211,12 @@ final class MediaRemoteAdapterSource {
             // was opened; in that case the initial stream emit is null/empty,
             // and no diff comes until something changes. A parallel `get`
             // catches whatever is playing right now.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            //
+            // CRITICAL: runs on a BACKGROUND queue because bootstrapGet()
+            // calls Process.waitUntilExit() which blocks synchronously for
+            // 500ms-1s (Perl boot + framework load). Running that on main
+            // freezes the whole UI — looked like a crash/hang on launch.
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 self?.bootstrapGet()
             }
         } catch {
@@ -220,6 +225,9 @@ final class MediaRemoteAdapterSource {
         }
     }
 
+    /// Runs on a BACKGROUND queue. Parses JSON on bg, hops to main for
+    /// the merge + onUpdate so `currentInfo` is only ever mutated on the
+    /// main queue (same queue as stream's parseLine).
     private func bootstrapGet() {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
@@ -236,18 +244,20 @@ final class MediaRemoteAdapterSource {
                 debugLog("bootstrap get returned empty")
                 return
             }
-            // `get` emits one JSON object to stdout.
-            if let payload = try? JSONDecoder().decode(AdapterStreamPayload.self, from: data) {
-                merge(payload)
-                debugLog("bootstrap get · title=\(currentInfo.title) playing=\(currentInfo.isPlaying)")
-                if currentInfo.hasTrack {
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self else { return }
-                        self.onUpdate?(self.currentInfo)
-                    }
+            guard let payload = try? JSONDecoder().decode(AdapterStreamPayload.self, from: data) else {
+                debugLog("bootstrap get · parse failed")
+                return
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.merge(payload)
+                self.debugLog("bootstrap get · title=\(self.currentInfo.title) playing=\(self.currentInfo.isPlaying)")
+                if self.currentInfo.hasTrack {
+                    self.onUpdate?(self.currentInfo)
                 }
             }
         } catch {
+            // debugLog runs main-ok from any queue, just logs.
             debugLog("bootstrap get failed: \(error)")
         }
     }
